@@ -308,8 +308,11 @@ def main():
         else:
             script_segments = [s.strip() for s in text.splitlines() if s.strip()]
     else:
-        print("Error: Either --script or --script-text must be provided.", file=sys.stderr)
-        sys.exit(1)
+        print("Notice: No script provided. Auto-generating subtitle segments directly from audio in order of upload...")
+        for i, file_path in enumerate(audio_files):
+            clean_name = os.path.splitext(os.path.basename(file_path))[0].replace("_", " ").replace("-", " ")
+            clean_title = clean_name.capitalize() if clean_name else f"Audio segment {i + 1}"
+            script_segments.append(clean_title)
 
     # Match clips with script segments
     clips_data = []

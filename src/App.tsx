@@ -1,6 +1,6 @@
 /**
  * Audio & SRT Stitcher Studio
- * Main Application
+ * Audio-first automatic speech transcription, concatenation, and precision SRT generation.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -13,7 +13,12 @@ import {
   FileCode2,
   GitBranch,
   ExternalLink,
-  Volume2
+  Volume2,
+  Wand2,
+  FileText,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle
 } from 'lucide-react';
 import { AudioClipItem, StitchOptions, StitchResult } from './types';
 import { AudioUploader } from './components/AudioUploader';
@@ -28,6 +33,7 @@ import {
   getAudioContext,
 } from './utils/audioEngine';
 import { generateSubtitles } from './utils/srtEngine';
+import { autoGenerateScript } from './utils/transcriptionService';
 
 export default function App() {
   const [clips, setClips] = useState<AudioClipItem[]>([]);
@@ -40,11 +46,14 @@ export default function App() {
   });
 
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string>('');
   const [stitchResult, setStitchResult] = useState<StitchResult | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'studio' | 'python'>('studio');
+  const [showScriptSection, setShowScriptSection] = useState(false);
 
-  // Load sample demo on first load so user gets immediate visual & auditory delight
+  // Load sample demo on first load so user gets immediate visual delight
   useEffect(() => {
     loadSampleProject();
   }, []);
@@ -85,8 +94,8 @@ export default function App() {
       setScriptText(scriptLines.join('\n'));
 
       // Automatically stitch sample project for instant preview
-      performStitch(newClips, options);
-      showNotification('Loaded sample project with 4 synchronized audio clips.');
+      performStitch(newClips, options, scriptLines.join('\n'));
+      showNotification('Loaded sample project with 4 synchronized clips.');
     } catch (err) {
       console.error('Failed to load sample demo:', err);
     }
@@ -96,12 +105,53 @@ export default function App() {
     setClips([]);
     setScriptText('');
     setStitchResult(null);
-    showNotification('Workspace cleared. Upload your audio clips and script.');
+    showNotification('Workspace cleared. Upload your audio clips.');
   };
 
+  /**
+   * Handle auto-transcription for all clips without text
+   */
+  const handleAutoTranscribe = async (sourceClips = clips) => {
+    if (sourceClips.length === 0) {
+      showNotification('Please upload audio clips first.');
+      return;
+    }
+
+    setIsTranscribing(true);
+    setStatusMessage('Extracting speech text from audio clips in order of upload...');
+
+    try {
+      const { updatedClips, combinedScript } = await autoGenerateScript(
+        sourceClips,
+        (current, total, msg) => {
+          setStatusMessage(msg);
+        }
+      );
+
+      setClips(updatedClips);
+      setScriptText(combinedScript);
+      showNotification(`Extracted script from ${updatedClips.length} audio clip(s)!`);
+      return { updatedClips, combinedScript };
+    } catch (err) {
+      console.error('Auto transcription failed:', err);
+      showNotification('Failed to auto-transcribe audio.');
+    } finally {
+      setIsTranscribing(false);
+      setStatusMessage('');
+    }
+  };
+
+  /**
+   * Main Stitch & SRT Generation Routine
+   * Supports:
+   * 1. One singular audio file OR multiple audio clips.
+   * 2. Zero script input: automatically extracts speech from audio in upload order!
+   * 3. Custom script override when provided.
+   */
   const performStitch = async (
     targetClips = clips,
-    targetOptions = options
+    targetOptions = options,
+    explicitScript = scriptText
   ) => {
     const readyClips = targetClips.filter(
       c => c.status === 'ready' && c.audioBuffer
@@ -115,18 +165,63 @@ export default function App() {
     setIsProcessing(true);
 
     try {
-      // 1. Concatenate Audio Buffers with Web Audio API
-      const gapSec = Math.max(0, targetOptions.gapMs / 1000);
-      const buffers = readyClips.map(c => c.audioBuffer!);
-      const mergedBuffer = concatenateAudioBuffers(buffers, gapSec);
+      let activeClips = [...readyClips];
 
-      // 2. Encode to high-fidelity 16-bit PCM WAV
-      const audioBlob = audioBufferToWavBlob(mergedBuffer);
-      const audioUrl = URL.createObjectURL(audioBlob);
+      // If user hasn't provided any script text or clip script lines,
+      // automatically extract text from the audio files!
+      const hasAnyScript =
+        explicitScript.trim().length > 0 ||
+        activeClips.some(c => c.scriptText.trim().length > 0);
 
-      // 3. Generate millisecond-precise Subtitles (SRT + VTT)
+      if (!hasAnyScript) {
+        setStatusMessage('No script provided. Extracting text directly from audio...');
+        const transcribeResult = await autoGenerateScript(
+          activeClips,
+          (curr, tot, msg) => setStatusMessage(msg)
+        );
+        activeClips = transcribeResult.updatedClips;
+        setClips(activeClips);
+        setScriptText(transcribeResult.combinedScript);
+      } else if (explicitScript.trim().length > 0) {
+        // If a script was pasted or edited, ensure lines are mapped to clips
+        const lines = explicitScript
+          .split(/\r?\n/)
+          .map(l => l.trim())
+          .filter(Boolean);
+
+        activeClips = activeClips.map((clip, idx) => ({
+          ...clip,
+          scriptText:
+            lines[idx] !== undefined && lines[idx].length > 0
+              ? lines[idx]
+              : clip.scriptText || `Audio clip ${idx + 1}`,
+        }));
+      }
+
+      setStatusMessage('Stitching audio and aligning millisecond SRT timestamps...');
+
+      // 1. Audio buffer concatenation (or single clip buffer)
+      let mergedBuffer: AudioBuffer;
+      let audioBlob: Blob;
+      let audioUrl: string;
+
+      if (activeClips.length === 1) {
+        // Single singular audio clip
+        mergedBuffer = activeClips[0].audioBuffer!;
+        audioBlob = audioBufferToWavBlob(mergedBuffer);
+        audioUrl = URL.createObjectURL(audioBlob);
+      } else {
+        // Multiple audio clips: Concatenate in order with gap
+        const gapSec = Math.max(0, targetOptions.gapMs / 1000);
+        const buffers = activeClips.map(c => c.audioBuffer!);
+        mergedBuffer = concatenateAudioBuffers(buffers, gapSec);
+        audioBlob = audioBufferToWavBlob(mergedBuffer);
+        audioUrl = URL.createObjectURL(audioBlob);
+      }
+
+      // 2. Generate millisecond-precise Subtitles (SRT + VTT)
       const { cues, srtContent, vttContent } = generateSubtitles(
-        readyClips,
+        activeClips,
         targetOptions
       );
 
@@ -142,15 +237,16 @@ export default function App() {
 
       setStitchResult(result);
       showNotification(
-        `Successfully stitched ${readyClips.length} clips into ${result.duration.toFixed(
+        `✓ Ready! Processed ${activeClips.length} clip(s) (${result.duration.toFixed(
           2
-        )}s audio with ${cues.length} subtitle cues!`
+        )}s) with ${cues.length} subtitle cues.`
       );
     } catch (err) {
       console.error('Stitching failed:', err);
-      showNotification('Error during audio stitching. Check file formats.');
+      showNotification('Error during audio processing. Check file formats.');
     } finally {
       setIsProcessing(false);
+      setStatusMessage('');
     }
   };
 
@@ -234,8 +330,16 @@ export default function App() {
       )}
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 lg:p-8 space-y-8">
-        {/* View Toggle Tabs for Mobile */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 lg:p-8 space-y-6">
+        {/* Status bar if transcribing or stitching */}
+        {(isProcessing || isTranscribing) && (
+          <div className="rounded-xl bg-blue-950/70 border border-blue-800/80 p-3.5 flex items-center gap-3 text-xs text-blue-200 animate-pulse">
+            <span className="w-4 h-4 border-2 border-blue-400/40 border-t-blue-400 rounded-full animate-spin shrink-0" />
+            <span className="font-mono">{statusMessage || 'Processing audio and subtitles...'}</span>
+          </div>
+        )}
+
+        {/* Mobile Tab Toggle */}
         <div className="flex md:hidden items-center p-1 bg-slate-900 rounded-lg border border-slate-800 text-xs font-medium">
           <button
             type="button"
@@ -261,24 +365,48 @@ export default function App() {
           <PythonScriptModal options={options} />
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-            {/* Left Column: Uploads & Script Editor (7 cols) */}
+            {/* Left Column: Audio Clips (7 cols) */}
             <div className="lg:col-span-7 space-y-6">
               {/* Audio Clips Manager */}
               <div className="rounded-xl bg-slate-900/60 border border-slate-800 p-5 shadow-sm">
-                <AudioUploader
-                  clips={clips}
-                  onClipsChange={setClips}
-                />
+                <AudioUploader clips={clips} onClipsChange={setClips} />
               </div>
 
-              {/* Script Text Editor */}
-              <div className="rounded-xl bg-slate-900/60 border border-slate-800 p-5 shadow-sm">
-                <ScriptEditor
-                  scriptText={scriptText}
-                  onScriptTextChange={setScriptText}
-                  clips={clips}
-                  onClipsChange={setClips}
-                />
+              {/* Optional Script Sync Feature Toggle */}
+              <div className="rounded-xl bg-slate-900/60 border border-slate-800 overflow-hidden shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setShowScriptSection(!showScriptSection)}
+                  className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-800/40 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-emerald-400" />
+                    <div>
+                      <span className="text-sm font-semibold text-slate-100">
+                        Custom Script Sync (Optional)
+                      </span>
+                      <p className="text-xs text-slate-400">
+                        Leave blank to auto-transcribe directly from audio, or expand to paste an external script.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-slate-400 p-1">
+                    {showScriptSection ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  </div>
+                </button>
+
+                {showScriptSection && (
+                  <div className="p-5 border-t border-slate-800/80 bg-slate-950/40">
+                    <ScriptEditor
+                      scriptText={scriptText}
+                      onScriptTextChange={setScriptText}
+                      clips={clips}
+                      onClipsChange={setClips}
+                      onAutoTranscribe={() => handleAutoTranscribe()}
+                      isTranscribing={isTranscribing}
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -289,40 +417,40 @@ export default function App() {
                 options={options}
                 onOptionsChange={newOpts => {
                   setOptions(newOpts);
-                  // If result exists, live re-generate subtitles
                   if (stitchResult) {
-                    performStitch(clips, newOpts);
+                    performStitch(clips, newOpts, scriptText);
                   }
                 }}
                 totalWords={totalWords}
               />
 
-              {/* Stitch Action CTA */}
+              {/* Primary Action Button */}
               <button
                 type="button"
-                onClick={() => performStitch(clips, options)}
-                disabled={isProcessing || clips.length === 0}
+                onClick={() => performStitch(clips, options, scriptText)}
+                disabled={isProcessing || isTranscribing || clips.length === 0}
                 className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-sm shadow-lg shadow-blue-600/25 transition-all active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {isProcessing ? (
+                {isProcessing || isTranscribing ? (
                   <>
                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Stitching Audio & Generating Subtitles...
+                    Processing Audio &amp; Generating SRT...
                   </>
                 ) : (
                   <>
                     <Play className="w-4 h-4 fill-current" />
-                    Stitch Audio & Generate SRT
+                    {clips.length <= 1
+                      ? 'Generate SRT & Copy Box'
+                      : 'Stitch Audio & Generate SRT'}
                   </>
                 )}
               </button>
 
-              {/* Output Preview & Playback Studio */}
+              {/* Output Preview, Copy Box & Playback Studio */}
               {stitchResult ? (
                 <PlaybackStudio
                   result={stitchResult}
                   onUpdateCueText={(idx, newText) => {
-                    // Update cue text in stitchResult
                     const updatedCues = stitchResult.cues.map(c =>
                       c.index === idx ? { ...c, text: newText } : c
                     );
@@ -347,7 +475,7 @@ export default function App() {
                     No combined audio generated yet.
                   </p>
                   <p className="text-xs text-slate-600 mt-1">
-                    Click &quot;Stitch Audio &amp; Generate SRT&quot; or &quot;Load Sample&quot; to preview.
+                    Upload audio clip(s) and click &quot;Stitch Audio &amp; Generate SRT&quot; to build the SRT and copy box.
                   </p>
                 </div>
               )}
@@ -359,7 +487,7 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-slate-800 py-6 px-6 text-center text-xs text-slate-500">
         <div className="flex flex-wrap items-center justify-center gap-4">
-          <span>Audio & SRT Stitcher Studio</span>
+          <span>Audio &amp; SRT Stitcher Studio</span>
           <span>·</span>
           <span>16-bit PCM WAV / SRT / WebVTT</span>
           <span>·</span>

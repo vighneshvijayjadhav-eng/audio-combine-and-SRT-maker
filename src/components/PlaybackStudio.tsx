@@ -10,11 +10,12 @@ import {
   VolumeX,
   FileText,
   Music,
-  ExternalLink,
   Search,
-  Sparkles
+  Sparkles,
+  ClipboardCheck,
+  Code
 } from 'lucide-react';
-import { StitchResult, SubtitleCue } from '../types';
+import { StitchResult } from '../types';
 import { formatSrtTimestamp } from '../utils/srtEngine';
 
 interface PlaybackStudioProps {
@@ -33,7 +34,8 @@ export const PlaybackStudio: React.FC<PlaybackStudioProps> = ({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [copiedSrt, setCopiedSrt] = useState(false);
+  const [copyBoxFormat, setCopyBoxFormat] = useState<'srt' | 'transcript' | 'vtt'>('srt');
+  const [copyFeedback, setCopyFeedback] = useState(false);
   const cueListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -117,17 +119,28 @@ export const PlaybackStudio: React.FC<PlaybackStudioProps> = ({
     downloadFile(blob, 'subtitles.vtt');
   };
 
-  const copySrtClipboard = () => {
-    navigator.clipboard.writeText(result.srtContent);
-    setCopiedSrt(true);
-    setTimeout(() => setCopiedSrt(false), 2000);
+  // Plain transcript text combining all cues
+  const plainTranscript = result.cues.map(c => c.text).join(' ');
+
+  // Get current text for the copy box
+  const getCopyBoxText = () => {
+    if (copyBoxFormat === 'srt') return result.srtContent;
+    if (copyBoxFormat === 'vtt') return result.vttContent;
+    return plainTranscript;
+  };
+
+  const copyBoxContent = () => {
+    navigator.clipboard.writeText(getCopyBoxText());
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
   };
 
   // Filter cues for search
   const filteredCues = searchQuery.trim()
-    ? result.cues.filter(c =>
-        c.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.startFormatted.includes(searchQuery)
+    ? result.cues.filter(
+        c =>
+          c.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          c.startFormatted.includes(searchQuery)
       )
     : result.cues;
 
@@ -171,18 +184,18 @@ export const PlaybackStudio: React.FC<PlaybackStudioProps> = ({
       />
 
       {/* Primary Action / Download Banner */}
-      <div className="rounded-xl bg-gradient-to-r from-blue-950/60 via-slate-900 to-emerald-950/50 border border-slate-800 p-4 flex flex-wrap items-center justify-between gap-4">
+      <div className="rounded-xl bg-gradient-to-r from-blue-950/70 via-slate-900 to-emerald-950/60 border border-slate-800 p-4 flex flex-wrap items-center justify-between gap-4 shadow-lg">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs uppercase tracking-wider font-semibold text-emerald-400 font-mono">
-              Ready for Export
+              Ready
             </span>
             <span className="text-xs text-slate-400 font-mono">
-              · {result.cues.length} Subtitle Cues · {duration.toFixed(2)}s Combined Audio
+              · {result.cues.length} Subtitle Cues · {duration.toFixed(2)}s Audio
             </span>
           </div>
           <h3 className="text-lg font-bold text-slate-100 mt-0.5">
-            Combined Master Audio & Precision Subtitles
+            Combined Audio & Precision SRT
           </h3>
         </div>
 
@@ -190,7 +203,7 @@ export const PlaybackStudio: React.FC<PlaybackStudioProps> = ({
           <button
             type="button"
             onClick={handleDownloadAudio}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-all"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-all active:scale-95"
           >
             <Music className="w-4 h-4" />
             Download Audio (.wav)
@@ -199,7 +212,7 @@ export const PlaybackStudio: React.FC<PlaybackStudioProps> = ({
           <button
             type="button"
             onClick={handleDownloadSrt}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm transition-all"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm transition-all active:scale-95"
           >
             <FileText className="w-4 h-4" />
             Download Subtitles (.srt)
@@ -212,21 +225,93 @@ export const PlaybackStudio: React.FC<PlaybackStudioProps> = ({
           >
             .vtt
           </button>
+        </div>
+      </div>
 
-          <button
-            type="button"
-            onClick={copySrtClipboard}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors"
-          >
-            {copiedSrt ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            {copiedSrt ? 'Copied SRT' : 'Copy SRT'}
-          </button>
+      {/* DEDICATED SRT & TRANSCRIPT COPY BOX */}
+      <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden shadow-md">
+        <div className="p-3.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-900/90">
+          <div className="flex items-center gap-2">
+            <ClipboardCheck className="w-4 h-4 text-emerald-400" />
+            <span className="text-sm font-semibold text-slate-100">
+              Subtitle &amp; Script Copy Box
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Format Selector: SRT / Plain Transcript / VTT */}
+            <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs font-mono">
+              <button
+                type="button"
+                onClick={() => setCopyBoxFormat('srt')}
+                className={`px-2.5 py-1 rounded transition-colors ${
+                  copyBoxFormat === 'srt'
+                    ? 'bg-blue-600 text-white font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                SRT Format
+              </button>
+              <button
+                type="button"
+                onClick={() => setCopyBoxFormat('transcript')}
+                className={`px-2.5 py-1 rounded transition-colors ${
+                  copyBoxFormat === 'transcript'
+                    ? 'bg-blue-600 text-white font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Plain Text
+              </button>
+              <button
+                type="button"
+                onClick={() => setCopyBoxFormat('vtt')}
+                className={`px-2.5 py-1 rounded transition-colors ${
+                  copyBoxFormat === 'vtt'
+                    ? 'bg-blue-600 text-white font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                WebVTT
+              </button>
+            </div>
+
+            {/* 1-Click Copy All Button */}
+            <button
+              type="button"
+              onClick={copyBoxContent}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all active:scale-95 ${
+                copyFeedback
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+              }`}
+            >
+              {copyFeedback ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+              {copyFeedback ? 'Copied to Clipboard!' : 'Copy Box Text'}
+            </button>
+          </div>
+        </div>
+
+        {/* Text Area */}
+        <div className="p-3 bg-slate-950">
+          <textarea
+            readOnly
+            value={getCopyBoxText()}
+            rows={7}
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-200 focus:outline-none focus:border-blue-500 leading-relaxed resize-y selection:bg-blue-600 selection:text-white"
+          />
+          <div className="flex justify-between items-center text-[11px] text-slate-500 font-mono mt-1 px-1">
+            <span>Click &quot;Copy Box Text&quot; to copy the entire generated output.</span>
+            <span>
+              {result.cues.length} cues · {plainTranscript.split(/\s+/).filter(Boolean).length} words
+            </span>
+          </div>
         </div>
       </div>
 
       {/* Teleprompter / Subtitle Video Screen Preview */}
       <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden shadow-2xl">
-        <div className="relative aspect-video max-h-[260px] w-full bg-gradient-to-b from-slate-900/90 to-black flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="relative aspect-video max-h-[240px] w-full bg-gradient-to-b from-slate-900/90 to-black flex flex-col items-center justify-center p-6 text-center select-none">
           <div className="absolute top-3 left-4 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
             <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
@@ -360,7 +445,7 @@ export const PlaybackStudio: React.FC<PlaybackStudioProps> = ({
           </div>
         </div>
 
-        <div ref={cueListRef} className="max-h-[380px] overflow-y-auto divide-y divide-slate-800/60">
+        <div ref={cueListRef} className="max-h-[340px] overflow-y-auto divide-y divide-slate-800/60">
           {filteredCues.map(cue => {
             const isActive = activeCue?.index === cue.index;
             return (
