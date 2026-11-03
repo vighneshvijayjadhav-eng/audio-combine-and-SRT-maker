@@ -1,0 +1,6 @@
+{
+  "name": "Audio & SRT Stitcher Studio",
+  "description": "Combine multiple audio clips in script order and generate sample-accurate SRT subtitles with customizable 1-10 word or line-wise grouping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
