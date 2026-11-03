@@ -59,7 +59,8 @@ export const AudioUploader: React.FC<AudioUploaderProps> = ({
   const processFiles = async (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter(f =>
       f.type.startsWith('audio/') ||
-      /\.(mp3|wav|m4a|ogg|flac|aac|webm)$/i.test(f.name)
+      f.type.startsWith('video/') ||
+      /\.(mp3|wav|m4a|ogg|flac|aac|webm|mp4|mov|mkv|avi|m4v)$/i.test(f.name)
     );
 
     if (fileArray.length === 0) return;
@@ -178,7 +179,7 @@ export const AudioUploader: React.FC<AudioUploaderProps> = ({
           ref={fileInputRef}
           type="file"
           multiple
-          accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.webm"
+          accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.webm,.mp4,.mov,.mkv,.avi,.m4v"
           className="hidden"
           onChange={e => {
             if (e.target.files) processFiles(e.target.files);
@@ -193,10 +194,10 @@ export const AudioUploader: React.FC<AudioUploaderProps> = ({
             <span className="text-sm font-medium text-slate-200 hover:text-blue-400">
               Click to upload
             </span>{' '}
-            <span className="text-sm text-slate-400">or drag audio clips here</span>
+            <span className="text-sm text-slate-400">or drag video/audio files here</span>
           </div>
           <p className="text-xs text-slate-500">
-            MP3, WAV, M4A, OGG, FLAC, AAC, WebM (Multiple files supported)
+            MP4, MOV, MKV, WebM, MP3, WAV, M4A, OGG, AAC (Single or Multiple)
           </p>
         </div>
       </div>

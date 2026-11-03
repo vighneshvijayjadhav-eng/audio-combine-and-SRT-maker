@@ -21,14 +21,52 @@ export function getAudioContext(): AudioContext {
  */
 export async function decodeAudioFile(file: File | Blob): Promise<{ buffer: AudioBuffer; duration: number; sampleRate: number }> {
   const ctx = getAudioContext();
-  const arrayBuffer = await file.arrayBuffer();
-  // decodeAudioData detaches the arrayBuffer, so we use a copy if needed
-  const buffer = await ctx.decodeAudioData(arrayBuffer);
-  return {
-    buffer,
-    duration: buffer.duration,
-    sampleRate: buffer.sampleRate,
-  };
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    return {
+      buffer,
+      duration: buffer.duration,
+      sampleRate: buffer.sampleRate,
+    };
+  } catch (browserDecodeErr) {
+    // If browser cannot decode video container directly, extract audio track via FFmpeg
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(arrayBuffer);
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const fileBase64 = btoa(binary);
+
+      const resp = await fetch('/api/extract-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64 }),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.success && data.wavBase64) {
+          const wavBinary = atob(data.wavBase64);
+          const wavBytes = new Uint8Array(wavBinary.length);
+          for (let i = 0; i < wavBinary.length; i++) {
+            wavBytes[i] = wavBinary.charCodeAt(i);
+          }
+          const buffer = await ctx.decodeAudioData(wavBytes.buffer);
+          return {
+            buffer,
+            duration: buffer.duration,
+            sampleRate: buffer.sampleRate,
+          };
+        }
+      }
+    } catch (fallbackErr) {
+      console.error('Video audio extraction failed:', fallbackErr);
+    }
+    throw browserDecodeErr;
+  }
 }
 
 /**

@@ -174,7 +174,7 @@ export default function App() {
         activeClips.some(c => c.scriptText.trim().length > 0);
 
       if (!hasAnyScript) {
-        setStatusMessage('No script provided. Extracting text directly from audio...');
+        setStatusMessage('Extracting real speech from audio/video tracks using Speech-to-Text...');
         const transcribeResult = await autoGenerateScript(
           activeClips,
           (curr, tot, msg) => setStatusMessage(msg)
@@ -182,6 +182,12 @@ export default function App() {
         activeClips = transcribeResult.updatedClips;
         setClips(activeClips);
         setScriptText(transcribeResult.combinedScript);
+
+        if (!transcribeResult.hasDetectedSpeech) {
+          showNotification(
+            'Notice: No audible spoken words were detected in the audio track. You can type or paste your script in the Script Sync section below.'
+          );
+        }
       } else if (explicitScript.trim().length > 0) {
         // If a script was pasted or edited, ensure lines are mapped to clips
         const lines = explicitScript
@@ -194,11 +200,11 @@ export default function App() {
           scriptText:
             lines[idx] !== undefined && lines[idx].length > 0
               ? lines[idx]
-              : clip.scriptText || `Audio clip ${idx + 1}`,
+              : clip.scriptText,
         }));
       }
 
-      setStatusMessage('Stitching audio and aligning millisecond SRT timestamps...');
+      setStatusMessage('Stitching audio and generating sample-accurate SRT timestamps...');
 
       // 1. Audio buffer concatenation (or single clip buffer)
       let mergedBuffer: AudioBuffer;

@@ -8,7 +8,6 @@ export async function blobToBase64(blob: Blob): Promise<string> {
     const reader = new FileReader();
     reader.onloadend = () => {
       const res = reader.result as string;
-      // Remove data URL prefix (e.g. "data:audio/wav;base64,")
       const base64 = res.split(',')[1] || '';
       resolve(base64);
     };
@@ -18,16 +17,16 @@ export async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Transcribe an audio clip using Gemini API via backend proxy,
- * with graceful browser speech recognition and heuristic fallback.
+ * Transcribe an audio or video clip using the real speech-to-text pipeline
+ * (Gemini API or local Whisper model via server endpoint).
+ * NEVER copies the filename or video title into the transcript.
  */
 export async function transcribeAudioClip(clip: AudioClipItem): Promise<string> {
-  // If clip already has text, return it
+  // If user already entered text manually, preserve it
   if (clip.scriptText && clip.scriptText.trim().length > 0) {
     return clip.scriptText.trim();
   }
 
-  // 1. Try server-side Gemini Speech-to-Text
   try {
     let blob: Blob | undefined = clip.file;
     if (!blob && clip.audioUrl) {
@@ -37,7 +36,7 @@ export async function transcribeAudioClip(clip: AudioClipItem): Promise<string> 
 
     if (blob) {
       const base64 = await blobToBase64(blob);
-      const mimeType = blob.type || (clip.name.endsWith('.mp3') ? 'audio/mp3' : 'audio/wav');
+      const mimeType = blob.type || 'audio/wav';
 
       const response = await fetch('/api/transcribe', {
         method: 'POST',
@@ -57,43 +56,41 @@ export async function transcribeAudioClip(clip: AudioClipItem): Promise<string> 
       }
     }
   } catch (err) {
-    console.warn('Gemini transcription endpoint error, trying fallback:', err);
+    console.error(`Transcription failed for ${clip.name}:`, err);
   }
 
-  // 2. Intelligent segment generator based on filename and duration
-  const cleanName = clip.name
-    .replace(/\.[^/.]+$/, '')
-    .replace(/[_-]+/g, ' ')
-    .trim();
-
-  // If clip filename contains descriptive words, format them
-  const formattedTitle = cleanName
-    ? cleanName.charAt(0).toUpperCase() + cleanName.slice(1)
-    : `Audio segment`;
-
-  return `${formattedTitle} (${clip.duration.toFixed(1)}s speech recording)`;
+  // If no speech was detected in the audio track, indicate clearly rather than copying the filename
+  return '';
 }
 
 /**
- * Automatically transcribes or generates script lines for all clips in the project.
+ * Automatically transcribes speech from all uploaded audio and video clips in sequence.
  */
 export async function autoGenerateScript(
   clips: AudioClipItem[],
   onProgress?: (current: number, total: number, message: string) => void
-): Promise<{ updatedClips: AudioClipItem[]; combinedScript: string }> {
+): Promise<{ updatedClips: AudioClipItem[]; combinedScript: string; hasDetectedSpeech: boolean }> {
   const updatedClips = [...clips];
   const total = clips.length;
+  let totalSpeechFound = 0;
 
   for (let i = 0; i < total; i++) {
     const clip = updatedClips[i];
     if (onProgress) {
-      onProgress(i + 1, total, `Transcribing clip ${i + 1} of ${total}: "${clip.name}"...`);
+      onProgress(i + 1, total, `Transcribing speech from "${clip.name}" (${i + 1}/${total})...`);
     }
 
-    const text = await transcribeAudioClip(clip);
-    clip.scriptText = text;
+    const spokenText = await transcribeAudioClip(clip);
+    clip.scriptText = spokenText;
+    if (spokenText.trim().length > 0) {
+      totalSpeechFound++;
+    }
   }
 
-  const combinedScript = updatedClips.map(c => c.scriptText).join('\n');
-  return { updatedClips, combinedScript };
+  const combinedScript = updatedClips.map(c => c.scriptText).filter(Boolean).join('\n');
+  return {
+    updatedClips,
+    combinedScript,
+    hasDetectedSpeech: totalSpeechFound > 0,
+  };
 }
